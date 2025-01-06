@@ -33,9 +33,11 @@ export const handler = async () => {
     if (!bvgReceived) missingEmails.push('BVG')
     if (!chargesReceived) missingEmails.push('Charges')
 
+    const bothReceived = bvgReceived && chargesReceived
+
     console.log(`Missing emails: ${missingEmails.join(', ') || 'None'}`)
 
-    return { missingEmails }
+    return { missingEmails, bothReceived }
   } catch (error) {
     console.error('Error checking emails received:', error)
     throw error

@@ -33,8 +33,12 @@ export const handler = async (event: any) => {
     for (const emailType of missingEmails) {
       const query =
         emailType === 'BVG'
-          ? `to:${process.env.BVG_EMAIL}`
-          : `to:${process.env.CHARGES_EMAIL}`
+          ? `to:${process.env.BVG_EMAIL} after:${now.getFullYear()}/${
+              now.getMonth() + 1
+            }/1 before:${now.getFullYear()}/${now.getMonth() + 2}/1`
+          : `to:${process.env.CHARGES_EMAIL} after:${now.getFullYear()}/${
+              now.getMonth() + 1
+            }/1 before:${now.getFullYear()}/${now.getMonth() + 2}/1`
       const res = await gmail.users.messages.list({ userId: 'me', q: query })
 
       if (res.data.messages && res.data.messages.length > 0) {
@@ -47,15 +51,13 @@ export const handler = async (event: any) => {
         await dynamo.updateItem({
           TableName: tableName,
           Key: { MonthKey: { S: monthKey }, EmailType: { S: emailType } },
-          UpdateExpression:
-            'SET Received = :received, #ts = :timestamp, MessageId = :messageId',
+          UpdateExpression: 'SET Received = :received, #ts = :timestamp',
           ExpressionAttributeNames: {
             '#ts': 'Timestamp',
           },
           ExpressionAttributeValues: {
             ':received': { BOOL: true },
             ':timestamp': { S: now.toISOString() },
-            ':messageId': { S: messageId },
           },
         })
       } else {

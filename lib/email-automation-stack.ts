@@ -82,6 +82,7 @@ export class EmailAutomationStack extends Stack {
       },
     })
     processingStatusTable.grantReadWriteData(processEmailsLambda)
+    emailsReceivedTable.grantReadWriteData(processEmailsLambda)
 
     // Step Functions Tasks
     const checkProcessingStatusTask = new LambdaInvoke(
@@ -127,9 +128,13 @@ export class EmailAutomationStack extends Stack {
             new Choice(this, 'Are Emails Missing?')
               .when(
                 Condition.isPresent('$.missingEmails[0]'),
-                updateEmailsReceivedTask
+                updateEmailsReceivedTask.next(checkEmailsReceivedTask)
               )
-              .otherwise(processEmailsTask)
+              .when(
+                Condition.booleanEquals('$.bothReceived', true),
+                processEmailsTask
+              )
+              .otherwise(new Succeed(this, 'Waiting for Emails'))
           )
         )
     )

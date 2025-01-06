@@ -3,7 +3,6 @@ import { google } from 'googleapis'
 
 const dynamo = new DynamoDB({})
 const tableName = process.env.PROCESSING_TABLE_NAME!
-const emailsTableName = process.env.EMAILS_TABLE_NAME!
 
 export const handler = async (event: any) => {
   const now = new Date()
@@ -24,29 +23,19 @@ export const handler = async (event: any) => {
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client })
 
   try {
-    // Get message IDs from DynamoDB
-    const emailsResult = await dynamo.getItem({
-      TableName: emailsTableName,
-      Key: {
-        MonthKey: { S: monthKey },
-        EmailType: { S: 'BVG' },
-      },
+    // Get BVG email
+    const bvgRes = await gmail.users.messages.list({
+      userId: 'me',
+      q: `to:${process.env.BVG_EMAIL} after:${now.getFullYear()}/${
+        now.getMonth() + 1
+      }/1 before:${now.getFullYear()}/${now.getMonth() + 2}/1`,
     })
-    const bvgMessageId = emailsResult.Item?.MessageId.S
-
-    const chargesResult = await dynamo.getItem({
-      TableName: emailsTableName,
-      Key: {
-        MonthKey: { S: monthKey },
-        EmailType: { S: 'Charges' },
-      },
-    })
-    const chargesMessageId = chargesResult.Item?.MessageId.S
-
-    // Get BVG email content
+    if (!bvgRes.data.messages?.[0]) {
+      throw new Error('BVG email not found')
+    }
     const bvgMessage = await gmail.users.messages.get({
       userId: 'me',
-      id: bvgMessageId!,
+      id: bvgRes.data.messages[0].id!,
       format: 'full',
     })
     const bvgHtmlPart = bvgMessage.data.payload?.parts?.find(
@@ -56,10 +45,19 @@ export const handler = async (event: any) => {
       ? Buffer.from(bvgHtmlPart.body.data, 'base64').toString()
       : null
 
-    // Get Charges email attachment
+    // Get Charges email
+    const chargesRes = await gmail.users.messages.list({
+      userId: 'me',
+      q: `to:${process.env.CHARGES_EMAIL} after:${now.getFullYear()}/${
+        now.getMonth() + 1
+      }/1 before:${now.getFullYear()}/${now.getMonth() + 2}/1`,
+    })
+    if (!chargesRes.data.messages?.[0]) {
+      throw new Error('Charges email not found')
+    }
     const chargesMessage = await gmail.users.messages.get({
       userId: 'me',
-      id: chargesMessageId!,
+      id: chargesRes.data.messages[0].id!,
       format: 'full',
     })
     const imagePart = chargesMessage.data.payload?.parts?.find((part) =>
@@ -69,13 +67,13 @@ export const handler = async (event: any) => {
     if (imagePart?.body?.attachmentId) {
       const attachment = await gmail.users.messages.attachments.get({
         userId: 'me',
-        messageId: chargesMessageId!,
+        messageId: chargesRes.data.messages[0].id!,
         id: imagePart.body.attachmentId,
       })
       chargesImage = attachment.data
     }
 
-    // Create email content
+    // Create and send combined email
     const boundary = 'boundary' + Date.now().toString()
     const emailContent = [
       'Content-Type: multipart/mixed; boundary=' + boundary,
@@ -97,7 +95,6 @@ export const handler = async (event: any) => {
       '--' + boundary + '--',
     ].join('\r\n')
 
-    // Send combined email
     const encodedEmail = Buffer.from(
       `To: ${process.env.TARGET_EMAIL}
 Subject: BVG Monthly Ticket and Charges
