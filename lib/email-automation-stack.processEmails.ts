@@ -77,7 +77,7 @@ export const handler = async (event: any) => {
         messageId: chargesRes.data.messages[0].id!,
         id: imagePart.body.attachmentId,
       })
-      chargesImage = attachment.data
+      chargesImage = attachment.data.data
     }
 
     // Create and send combined email
@@ -93,11 +93,11 @@ export const handler = async (event: any) => {
       bvgContent || 'No BVG content found',
       '',
       '--' + boundary,
-      'Content-Type: image/jpeg',
+      `Content-Type: ${imagePart?.mimeType || 'image/jpeg'}`,
       'Content-Transfer-Encoding: base64',
       'Content-Disposition: attachment; filename="charges.jpg"',
       '',
-      chargesImage?.data || 'No charges image found',
+      chargesImage || 'No charges image found',
       '',
       '--' + boundary + '--',
     ].join('\r\n')
