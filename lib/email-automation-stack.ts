@@ -103,7 +103,6 @@ export class EmailAutomationStack extends Stack {
       'Update Emails Received Task',
       {
         lambdaFunction: updateEmailsReceivedLambda,
-        outputPath: '$.Payload',
       }
     )
 
