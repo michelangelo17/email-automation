@@ -62,7 +62,11 @@ export const handler = async () => {
     await dynamo.updateItem({
       TableName: tableName,
       Key: { MonthKey: { S: monthKey } },
-      UpdateExpression: 'SET Status = :status, LastUpdated = :timestamp',
+      UpdateExpression: 'SET #status = :status, #ts = :timestamp',
+      ExpressionAttributeNames: {
+        '#status': 'Status',
+        '#ts': 'LastUpdated',
+      },
       ExpressionAttributeValues: {
         ':status': { S: 'COMPLETE' },
         ':timestamp': { S: now.toISOString() },
