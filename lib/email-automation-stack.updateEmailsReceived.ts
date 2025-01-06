@@ -1,5 +1,6 @@
 import { DynamoDB } from '@aws-sdk/client-dynamodb'
 import { google } from 'googleapis'
+import { getGmailDateQuery } from './utils/dateUtils'
 
 const dynamo = new DynamoDB({})
 const tableName = process.env.EMAILS_TABLE_NAME!
@@ -33,12 +34,8 @@ export const handler = async (event: any) => {
     for (const emailType of missingEmails) {
       const query =
         emailType === 'BVG'
-          ? `to:${process.env.BVG_EMAIL} after:${now.getFullYear()}/${
-              now.getMonth() + 1
-            }/1 before:${now.getFullYear()}/${now.getMonth() + 2}/1`
-          : `to:${process.env.CHARGES_EMAIL} after:${now.getFullYear()}/${
-              now.getMonth() + 1
-            }/1 before:${now.getFullYear()}/${now.getMonth() + 2}/1`
+          ? `to:${process.env.BVG_EMAIL} ${getGmailDateQuery(now)}`
+          : `to:${process.env.CHARGES_EMAIL} ${getGmailDateQuery(now)}`
       const res = await gmail.users.messages.list({ userId: 'me', q: query })
 
       if (res.data.messages && res.data.messages.length > 0) {

@@ -1,5 +1,6 @@
 import { DynamoDB } from '@aws-sdk/client-dynamodb'
 import { google } from 'googleapis'
+import { getGmailDateQuery } from './utils/dateUtils'
 
 const dynamo = new DynamoDB({})
 const tableName = process.env.PROCESSING_TABLE_NAME!
@@ -26,9 +27,7 @@ export const handler = async (event: any) => {
     // Get BVG email
     const bvgRes = await gmail.users.messages.list({
       userId: 'me',
-      q: `to:${process.env.BVG_EMAIL} after:${now.getFullYear()}/${
-        now.getMonth() + 1
-      }/1 before:${now.getFullYear()}/${now.getMonth() + 2}/1`,
+      q: `to:${process.env.BVG_EMAIL} ${getGmailDateQuery(now)}`,
     })
     if (!bvgRes.data.messages?.[0]) {
       throw new Error('BVG email not found')
