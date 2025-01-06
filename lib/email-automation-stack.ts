@@ -60,6 +60,9 @@ export class EmailAutomationStack extends Stack {
       {
         environment: {
           EMAILS_TABLE_NAME: emailsReceivedTable.tableName,
+          GMAIL_CLIENT_ID: process.env.GMAIL_CLIENT_ID!,
+          GMAIL_CLIENT_SECRET: process.env.GMAIL_CLIENT_SECRET!,
+          GMAIL_REFRESH_TOKEN: process.env.GMAIL_REFRESH_TOKEN!,
         },
       }
     )
@@ -69,6 +72,9 @@ export class EmailAutomationStack extends Stack {
     const processEmailsLambda = new NodejsFunction(this, 'processEmails', {
       environment: {
         PROCESSING_TABLE_NAME: processingStatusTable.tableName,
+        GMAIL_CLIENT_ID: process.env.GMAIL_CLIENT_ID!,
+        GMAIL_CLIENT_SECRET: process.env.GMAIL_CLIENT_SECRET!,
+        GMAIL_REFRESH_TOKEN: process.env.GMAIL_REFRESH_TOKEN!,
       },
     })
     processingStatusTable.grantReadWriteData(processEmailsLambda)
