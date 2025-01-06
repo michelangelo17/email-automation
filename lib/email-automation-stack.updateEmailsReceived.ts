@@ -42,7 +42,10 @@ export const handler = async (event: any) => {
         await dynamo.updateItem({
           TableName: tableName,
           Key: { MonthKey: { S: monthKey }, EmailType: { S: emailType } },
-          UpdateExpression: 'SET Received = :received, Timestamp = :timestamp',
+          UpdateExpression: 'SET Received = :received, #ts = :timestamp',
+          ExpressionAttributeNames: {
+            '#ts': 'Timestamp',
+          },
           ExpressionAttributeValues: {
             ':received': { BOOL: true },
             ':timestamp': { S: now.toISOString() },
