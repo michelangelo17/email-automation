@@ -33,8 +33,8 @@ export const handler = async (event: any) => {
     for (const emailType of missingEmails) {
       const query =
         emailType === 'BVG'
-          ? 'to:bvg@michelangelo.codes'
-          : 'to:bvgcharges@michelangelo.codes'
+          ? `to:${process.env.BVG_EMAIL}`
+          : `to:${process.env.CHARGES_EMAIL}`
       const res = await gmail.users.messages.list({ userId: 'me', q: query })
 
       if (res.data.messages && res.data.messages.length > 0) {
@@ -42,31 +42,20 @@ export const handler = async (event: any) => {
 
         // Get the full message content
         const messageId = res.data.messages[0].id!
-        const message = await gmail.users.messages.get({
-          userId: 'me',
-          id: messageId,
-          format: 'full',
-        })
-
-        // For debugging
-        console.log('Message parts:', message.data.payload?.parts)
-        console.log('Message body:', message.data.payload?.body)
-        console.log('Message MIME type:', message.data.payload?.mimeType)
-
-        console.log('Full message:', message.data)
+        console.log(`${emailType} email found with ID: ${messageId}`)
 
         await dynamo.updateItem({
           TableName: tableName,
           Key: { MonthKey: { S: monthKey }, EmailType: { S: emailType } },
           UpdateExpression:
-            'SET Received = :received, #ts = :timestamp, MessageData = :messageData',
+            'SET Received = :received, #ts = :timestamp, MessageId = :messageId',
           ExpressionAttributeNames: {
             '#ts': 'Timestamp',
           },
           ExpressionAttributeValues: {
             ':received': { BOOL: true },
             ':timestamp': { S: now.toISOString() },
-            ':messageData': { S: JSON.stringify(message.data) },
+            ':messageId': { S: messageId },
           },
         })
       } else {
