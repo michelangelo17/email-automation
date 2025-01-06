@@ -77,6 +77,7 @@ export const handler = async (event: any) => {
         messageId: chargesRes.data.messages[0].id!,
         id: imagePart.body.attachmentId,
       })
+      // The attachment data is already in base64 format
       chargesImage = attachment.data.data
     }
 
