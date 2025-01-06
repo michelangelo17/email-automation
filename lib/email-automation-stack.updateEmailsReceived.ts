@@ -34,7 +34,7 @@ export const handler = async (event: any) => {
       const query =
         emailType === 'BVG'
           ? 'to:bvg@michelangelo.codes'
-          : 'to:charges@michelangelo.codes'
+          : 'to:bvgcharges@michelangelo.codes'
       const res = await gmail.users.messages.list({ userId: 'me', q: query })
 
       if (res.data.messages && res.data.messages.length > 0) {

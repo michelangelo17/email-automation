@@ -123,7 +123,7 @@ export class EmailAutomationStack extends Stack {
           checkEmailsReceivedTask.next(
             new Choice(this, 'Are Emails Missing?')
               .when(
-                Condition.booleanEquals('$.missingEmails', true),
+                Condition.isPresent('$.missingEmails[0]'),
                 updateEmailsReceivedTask.next(processEmailsTask)
               )
               .otherwise(processEmailsTask)
