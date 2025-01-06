@@ -11,6 +11,7 @@ import {
   Condition,
 } from 'aws-cdk-lib/aws-stepfunctions'
 import { LambdaInvoke } from 'aws-cdk-lib/aws-stepfunctions-tasks'
+import { Duration } from 'aws-cdk-lib'
 
 export class EmailAutomationStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
@@ -82,6 +83,7 @@ export class EmailAutomationStack extends Stack {
         BVG_EMAIL: process.env.BVG_EMAIL!,
         CHARGES_EMAIL: process.env.CHARGES_EMAIL!,
       },
+      timeout: Duration.seconds(30),
     })
     processingStatusTable.grantReadWriteData(processEmailsLambda)
     emailsReceivedTable.grantReadWriteData(processEmailsLambda)
