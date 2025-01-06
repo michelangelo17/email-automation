@@ -50,7 +50,7 @@ export const handler = async () => {
 
     // Send email to HR
     const encodedEmail = Buffer.from(
-      `To: hr@example.com\nSubject: Reimbursement Request for ${monthKey}\n\n${combinedContent}`
+      `To: m@michelangelo.codes\nSubject: Reimbursement Request for ${monthKey}\n\n${combinedContent}`
     ).toString('base64')
 
     await gmail.users.messages.send({
