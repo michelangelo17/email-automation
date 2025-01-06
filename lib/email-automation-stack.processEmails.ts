@@ -25,10 +25,15 @@ export const handler = async (event: any) => {
 
   try {
     // Get BVG email
+    console.log(
+      'BVG query:',
+      `to:${process.env.BVG_EMAIL} ${getGmailDateQuery(now)}`
+    )
     const bvgRes = await gmail.users.messages.list({
       userId: 'me',
       q: `to:${process.env.BVG_EMAIL} ${getGmailDateQuery(now)}`,
     })
+    console.log('BVG response:', JSON.stringify(bvgRes.data, null, 2))
     if (!bvgRes.data.messages?.[0]) {
       throw new Error('BVG email not found')
     }
@@ -45,12 +50,15 @@ export const handler = async (event: any) => {
       : null
 
     // Get Charges email
+    console.log(
+      'Charges query:',
+      `to:${process.env.CHARGES_EMAIL} ${getGmailDateQuery(now)}`
+    )
     const chargesRes = await gmail.users.messages.list({
       userId: 'me',
-      q: `to:${process.env.CHARGES_EMAIL} after:${now.getFullYear()}/${
-        now.getMonth() + 1
-      }/1 before:${now.getFullYear()}/${now.getMonth() + 2}/1`,
+      q: `to:${process.env.CHARGES_EMAIL} ${getGmailDateQuery(now)}`,
     })
+    console.log('Charges response:', JSON.stringify(chargesRes.data, null, 2))
     if (!chargesRes.data.messages?.[0]) {
       throw new Error('Charges email not found')
     }
