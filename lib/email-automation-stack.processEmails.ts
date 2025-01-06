@@ -77,52 +77,36 @@ export const handler = async (event: any) => {
         messageId: chargesRes.data.messages[0].id!,
         id: imagePart.body.attachmentId,
       })
-      // The attachment data is already in base64 format
-      chargesImage = attachment.data.data
+      // The attachment data needs to be properly formatted
+      const boundary = 'boundary' + Date.now().toString()
+      const emailContent = [
+        'Content-Type: multipart/mixed; boundary=' + boundary,
+        '',
+        '--' + boundary,
+        'Content-Type: text/html; charset=UTF-8',
+        '',
+        '<h2>BVG Ticket and Charges</h2>',
+        '<h3>BVG Ticket:</h3>',
+        bvgContent || 'No BVG content found',
+        '',
+        '--' + boundary,
+        `Content-Type: ${imagePart.mimeType}`,
+        'Content-Transfer-Encoding: base64',
+        'Content-Disposition: attachment; filename="charges.jpg"',
+        '',
+        attachment.data.data, // Use the raw base64 data directly
+        '',
+        '--' + boundary + '--',
+      ].join('\r\n')
+
+      // Send the email using Gmail API
+      await gmail.users.messages.send({
+        userId: 'me',
+        requestBody: {
+          raw: Buffer.from(emailContent).toString('base64url'),
+        },
+      })
     }
-
-    // Create and send combined email
-    const boundary = 'boundary' + Date.now().toString()
-    const emailContent = [
-      'Content-Type: multipart/mixed; boundary=' + boundary,
-      '',
-      '--' + boundary,
-      'Content-Type: text/html; charset=UTF-8',
-      '',
-      '<h2>BVG Ticket and Charges</h2>',
-      '<h3>BVG Ticket:</h3>',
-      bvgContent || 'No BVG content found',
-      '',
-      '--' + boundary,
-      `Content-Type: ${imagePart?.mimeType || 'image/jpeg'}`,
-      'Content-Transfer-Encoding: base64',
-      'Content-Disposition: attachment; filename="charges.jpg"',
-      '',
-      chargesImage || 'No charges image found',
-      '',
-      '--' + boundary + '--',
-    ].join('\r\n')
-
-    const encodedEmail = Buffer.from(
-      `To: ${process.env.TARGET_EMAIL}
-Subject: BVG Monthly Ticket and Charges
-Content-Type: multipart/mixed; boundary=${boundary}
-
-${emailContent}`
-    )
-      .toString('base64')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '')
-
-    await gmail.users.messages.send({
-      userId: 'me',
-      requestBody: {
-        raw: encodedEmail,
-      },
-    })
-
-    console.log('Combined email sent successfully')
 
     // Update processing status
     await dynamo.updateItem({
