@@ -39,16 +39,34 @@ export const handler = async (event: any) => {
 
       if (res.data.messages && res.data.messages.length > 0) {
         console.log(`${emailType} email found.`)
+
+        // Get the full message content
+        const messageId = res.data.messages[0].id!
+        const message = await gmail.users.messages.get({
+          userId: 'me',
+          id: messageId,
+          format: 'full',
+        })
+
+        // For debugging
+        console.log('Message parts:', message.data.payload?.parts)
+        console.log('Message body:', message.data.payload?.body)
+        console.log('Message MIME type:', message.data.payload?.mimeType)
+
+        console.log('Full message:', message.data)
+
         await dynamo.updateItem({
           TableName: tableName,
           Key: { MonthKey: { S: monthKey }, EmailType: { S: emailType } },
-          UpdateExpression: 'SET Received = :received, #ts = :timestamp',
+          UpdateExpression:
+            'SET Received = :received, #ts = :timestamp, MessageData = :messageData',
           ExpressionAttributeNames: {
             '#ts': 'Timestamp',
           },
           ExpressionAttributeValues: {
             ':received': { BOOL: true },
             ':timestamp': { S: now.toISOString() },
+            ':messageData': { S: JSON.stringify(message.data) },
           },
         })
       } else {
