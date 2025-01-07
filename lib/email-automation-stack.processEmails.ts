@@ -71,47 +71,49 @@ export const handler = async (event: any) => {
       part.mimeType?.startsWith('image/')
     )
 
-    let attachmentData = ''
-    let attachmentMimeType = ''
-    if (imagePart?.body?.attachmentId) {
-      const attachment = await gmail.users.messages.attachments.get({
-        userId: 'me',
-        messageId: chargesRes.data.messages[0].id!,
-        id: imagePart.body.attachmentId,
-      })
-
-      attachmentData = attachment.data.data!
-      attachmentMimeType = imagePart.mimeType!
-    } else {
+    if (!imagePart?.body?.attachmentId) {
       throw new Error('Charges email attachment not found')
     }
 
-    // Construct the email content
+    // Fetch the image attachment
+    const attachment = await gmail.users.messages.attachments.get({
+      userId: 'me',
+      messageId: chargesRes.data.messages[0].id!,
+      id: imagePart.body.attachmentId!,
+    })
+
+    // Ensure the image is correctly Base64-encoded
+    const attachmentData = attachment.data.data!
+    const attachmentMimeType = imagePart.mimeType!
+    const attachmentFilename = imagePart.filename || 'charges.jpg'
+
+    // Construct the MIME email
     const boundary = `boundary-${Date.now()}`
     const emailContent = [
       `From: me`,
       `To: ${process.env.TARGET_EMAIL}`,
       `Subject: BVG Ticket and Charges`,
-      `Content-Type: multipart/mixed; boundary=${boundary}`,
+      `MIME-Version: 1.0`,
+      `Content-Type: multipart/mixed; boundary="${boundary}"`,
       '',
       `--${boundary}`,
-      `Content-Type: text/html; charset=UTF-8`,
+      `Content-Type: text/html; charset="UTF-8"`,
       '',
       `<h2>BVG Ticket and Charges</h2>`,
       `<h3>BVG Ticket:</h3>`,
       bvgContent,
       '',
       `--${boundary}`,
-      `Content-Type: ${attachmentMimeType}; name="charges.jpg"`,
+      `Content-Type: ${attachmentMimeType}; name="${attachmentFilename}"`,
       `Content-Transfer-Encoding: base64`,
-      `Content-Disposition: attachment; filename="charges.jpg"`,
+      `Content-Disposition: attachment; filename="${attachmentFilename}"`,
       '',
-      attachmentData,
+      attachmentData, // Insert Base64-encoded image data
       '',
       `--${boundary}--`,
     ].join('\r\n')
 
-    // Send the email using Gmail API
+    // Send the email
     await gmail.users.messages.send({
       userId: 'me',
       requestBody: {
