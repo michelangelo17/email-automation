@@ -24,7 +24,7 @@ export const handler = async (event: any) => {
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client })
 
   try {
-    // Get BVG email
+    // 1. Get BVG email
     const bvgQuery = `to:${process.env.BVG_EMAIL} ${getGmailDateQuery(now)}`
     const bvgRes = await gmail.users.messages.list({
       userId: 'me',
@@ -48,7 +48,7 @@ export const handler = async (event: any) => {
       ? Buffer.from(bvgHtmlPart.body.data, 'base64').toString('utf-8')
       : 'No BVG content found'
 
-    // Get Charges email
+    // 2. Get Charges email
     const chargesQuery = `to:${process.env.CHARGES_EMAIL} ${getGmailDateQuery(
       now
     )}`
@@ -75,32 +75,36 @@ export const handler = async (event: any) => {
       throw new Error('Charges email attachment not found')
     }
 
-    // Fetch the image attachment
+    // 3. Fetch the image attachment
     const attachment = await gmail.users.messages.attachments.get({
       userId: 'me',
       messageId: chargesRes.data.messages[0].id!,
       id: imagePart.body.attachmentId!,
     })
 
-    // Ensure the image is correctly Base64-encoded
-    const attachmentData = attachment.data.data!
+    // 4. Convert the attachment to standard Base64
+    //    The Gmail API often returns base64url, so decode then re-encode:
+    const rawAttachmentData = attachment.data.data || ''
+    // Decode from Gmail’s base64url to a Buffer
+    const decodedAttachment = Buffer.from(rawAttachmentData, 'base64')
+    // Re-encode as standard Base64 for the MIME part
+    const standardBase64Attachment = decodedAttachment.toString('base64')
+
     const attachmentMimeType = imagePart.mimeType!
     const attachmentFilename = imagePart.filename || 'charges.jpg'
 
-    // Construct the MIME email
+    // 5. Construct the MIME email
     const boundary = `boundary-${Date.now()}`
     const emailContent = [
       `From: me`,
       `To: ${process.env.TARGET_EMAIL}`,
-      `Subject: BVG Ticket and Charges`,
+      `Subject: Deutschlandticket ${monthKey}`,
       `MIME-Version: 1.0`,
       `Content-Type: multipart/mixed; boundary="${boundary}"`,
       '',
       `--${boundary}`,
       `Content-Type: text/html; charset="UTF-8"`,
       '',
-      `<h2>BVG Ticket and Charges</h2>`,
-      `<h3>BVG Ticket:</h3>`,
       bvgContent,
       '',
       `--${boundary}`,
@@ -108,12 +112,14 @@ export const handler = async (event: any) => {
       `Content-Transfer-Encoding: base64`,
       `Content-Disposition: attachment; filename="${attachmentFilename}"`,
       '',
-      attachmentData, // Insert Base64-encoded image data
+      standardBase64Attachment,
       '',
       `--${boundary}--`,
     ].join('\r\n')
 
-    // Send the email
+    // 6. Send the email
+    //    Gmail’s “raw” property must be base64-URL encoded.
+    //    In Node 18+, .toString('base64url') does that automatically.
     await gmail.users.messages.send({
       userId: 'me',
       requestBody: {
@@ -121,7 +127,7 @@ export const handler = async (event: any) => {
       },
     })
 
-    // Update processing status
+    // 7. Update processing status in Dynamo
     await dynamo.updateItem({
       TableName: tableName,
       Key: { MonthKey: { S: monthKey } },
