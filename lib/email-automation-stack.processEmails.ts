@@ -98,6 +98,7 @@ export const handler = async (event: any) => {
     const emailContent = [
       `From: me`,
       `To: ${process.env.TARGET_EMAIL}`,
+      `Cc: ${process.env.MY_EMAIL}`,
       `Subject: Deutschlandticket ${monthKey}`,
       `MIME-Version: 1.0`,
       `Content-Type: multipart/mixed; boundary="${boundary}"`,
