@@ -80,6 +80,9 @@ export const handler = async (event: any) => {
       // The attachment data needs to be properly formatted
       const boundary = 'boundary' + Date.now().toString()
       const emailContent = [
+        'From: me',
+        `To: ${process.env.TARGET_EMAIL}`,
+        'Subject: BVG Ticket and Charges',
         'Content-Type: multipart/mixed; boundary=' + boundary,
         '',
         '--' + boundary,
