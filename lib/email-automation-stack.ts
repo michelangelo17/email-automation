@@ -3,7 +3,7 @@ import { Construct } from 'constructs'
 import { AttributeType, BillingMode, Table } from 'aws-cdk-lib/aws-dynamodb'
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs'
 import { Schedule, Rule } from 'aws-cdk-lib/aws-events'
-import { LambdaFunction } from 'aws-cdk-lib/aws-events-targets'
+import { SfnStateMachine } from 'aws-cdk-lib/aws-events-targets'
 import {
   StateMachine,
   Choice,
@@ -80,6 +80,7 @@ export class EmailAutomationStack extends Stack {
         GMAIL_CLIENT_SECRET: process.env.GMAIL_CLIENT_SECRET!,
         GMAIL_REFRESH_TOKEN: process.env.GMAIL_REFRESH_TOKEN!,
         TARGET_EMAIL: process.env.TARGET_EMAIL!,
+        MY_EMAIL: process.env.MY_EMAIL!,
         BVG_EMAIL: process.env.BVG_EMAIL!,
         CHARGES_EMAIL: process.env.CHARGES_EMAIL!,
       },
@@ -149,10 +150,10 @@ export class EmailAutomationStack extends Stack {
 
     // EventBridge Rule to Trigger State Machine Daily
     const dailyRule = new Rule(this, 'DailyTriggerRule', {
-      schedule: Schedule.expression('cron(0 8 * * ? *)'), // Every day at 8 AM UTC
+      schedule: Schedule.expression('cron(0 7 * * ? *)'), // Every day at 7 AM UTC
     })
 
-    dailyRule.addTarget(new LambdaFunction(checkProcessingStatusLambda))
+    dailyRule.addTarget(new SfnStateMachine(stateMachine))
 
     // Outputs
     new CfnOutput(this, 'StateMachineArn', {
