@@ -2,6 +2,7 @@
   "name": "email-automation",
   "version": "0.1.0",
   "bin": "bin/email-automation.js",
+  "license": "MIT",
   "scripts": {
     "build": "tsc",
     "watch": "tsc -w",

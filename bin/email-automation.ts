@@ -2,6 +2,7 @@
 import * as cdk from 'aws-cdk-lib'
 import { EmailAutomationStack } from '../lib/email-automation-stack'
 import * as dotenv from 'dotenv'
+import { EmailAutomationFragmentStack } from '../lib/email-automation-fragment-stack'
 
 // Load environment variables from .env file
 dotenv.config()
@@ -17,3 +18,4 @@ if (
 
 const app = new cdk.App()
 new EmailAutomationStack(app, 'EmailAutomationStack')
+new EmailAutomationFragmentStack(app, 'EmailAutomationFragmentStack')
