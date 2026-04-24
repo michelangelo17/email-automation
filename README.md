@@ -71,7 +71,7 @@ Secrets are managed via [cdk-gitify-secrets](https://github.com/michelangelo17/c
 4. Log in: `sr login`
 5. Propose secrets from your `.env`: `sr propose -p email-automation -e production -r "Initial secrets"`
 6. Open the dashboard (FrontendUrl from stack outputs), approve the change
-7. Deploy the app stacks: `npx cdk deploy EmailAutomationStack` (and `EmailAutomationFragmentStack` if you use it)
+7. Deploy the app stack: `npx cdk deploy EmailAutomationStack`
 
 **Ongoing:** Use `sr pull -p email-automation -e production` to refresh local `.env`; use `sr history` and `sr status` to inspect the workflow.
 
@@ -94,13 +94,12 @@ yarn build
 
 ## Deployment
 
-Deploy in order: first the SecretReview stack and propose/approve secrets (see [Secret management](#secret-management-cdk-gitify-secrets)), then the app stacks:
+Deploy in order: first the SecretReview stack and propose/approve secrets (see [Secret management](#secret-management-cdk-gitify-secrets)), then the app stack:
 
 ```bash
 npx cdk deploy SecretReviewStack
 # ... then sr propose, approve in dashboard ...
 npx cdk deploy EmailAutomationStack
-npx cdk deploy EmailAutomationFragmentStack   # optional
 ```
 
 ## Troubleshooting
