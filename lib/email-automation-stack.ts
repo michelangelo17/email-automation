@@ -1,4 +1,7 @@
 import { CfnOutput, Stack, StackProps } from 'aws-cdk-lib'
+import { ISecret } from 'aws-cdk-lib/aws-secretsmanager'
+import { IKey } from 'aws-cdk-lib/aws-kms'
+import { PolicyStatement } from 'aws-cdk-lib/aws-iam'
 import { Construct } from 'constructs'
 import { AttributeType, BillingMode, Table } from 'aws-cdk-lib/aws-dynamodb'
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs'
@@ -13,9 +16,24 @@ import {
 import { LambdaInvoke } from 'aws-cdk-lib/aws-stepfunctions-tasks'
 import { Duration } from 'aws-cdk-lib'
 
+export interface EmailAutomationStackProps extends StackProps {
+  secret: ISecret
+  encryptionKey: IKey
+}
+
 export class EmailAutomationStack extends Stack {
-  constructor(scope: Construct, id: string, props?: StackProps) {
+  constructor(scope: Construct, id: string, props: EmailAutomationStackProps) {
     super(scope, id, props)
+    const { secret, encryptionKey } = props
+
+    const secretReadPolicy = new PolicyStatement({
+      actions: ['secretsmanager:GetSecretValue'],
+      resources: [secret.secretArn],
+    })
+    const kmsDecryptPolicy = new PolicyStatement({
+      actions: ['kms:Decrypt'],
+      resources: [encryptionKey.keyArn],
+    })
 
     // DynamoDB: Emails Received Table
     const emailsReceivedTable = new Table(this, 'EmailsReceivedTable', {
@@ -61,33 +79,27 @@ export class EmailAutomationStack extends Stack {
       {
         environment: {
           EMAILS_TABLE_NAME: emailsReceivedTable.tableName,
-          GMAIL_CLIENT_ID: process.env.GMAIL_CLIENT_ID!,
-          GMAIL_CLIENT_SECRET: process.env.GMAIL_CLIENT_SECRET!,
-          GMAIL_REFRESH_TOKEN: process.env.GMAIL_REFRESH_TOKEN!,
-          BVG_EMAIL: process.env.BVG_EMAIL!,
-          CHARGES_EMAIL: process.env.CHARGES_EMAIL!,
+          SECRET_ARN: secret.secretArn,
         },
       }
     )
     emailsReceivedTable.grantReadWriteData(updateEmailsReceivedLambda)
+    updateEmailsReceivedLambda.addToRolePolicy(secretReadPolicy)
+    updateEmailsReceivedLambda.addToRolePolicy(kmsDecryptPolicy)
 
     // Lambda: Process Emails
     const processEmailsLambda = new NodejsFunction(this, 'processEmails', {
       environment: {
         PROCESSING_TABLE_NAME: processingStatusTable.tableName,
         EMAILS_TABLE_NAME: emailsReceivedTable.tableName,
-        GMAIL_CLIENT_ID: process.env.GMAIL_CLIENT_ID!,
-        GMAIL_CLIENT_SECRET: process.env.GMAIL_CLIENT_SECRET!,
-        GMAIL_REFRESH_TOKEN: process.env.GMAIL_REFRESH_TOKEN!,
-        TARGET_EMAIL: process.env.TARGET_EMAIL!,
-        MY_EMAIL: process.env.MY_EMAIL!,
-        BVG_EMAIL: process.env.BVG_EMAIL!,
-        CHARGES_EMAIL: process.env.CHARGES_EMAIL!,
+        SECRET_ARN: secret.secretArn,
       },
       timeout: Duration.seconds(30),
     })
     processingStatusTable.grantReadWriteData(processEmailsLambda)
     emailsReceivedTable.grantReadWriteData(processEmailsLambda)
+    processEmailsLambda.addToRolePolicy(secretReadPolicy)
+    processEmailsLambda.addToRolePolicy(kmsDecryptPolicy)
 
     // Step Functions Tasks
     const checkProcessingStatusTask = new LambdaInvoke(
@@ -108,11 +120,24 @@ export class EmailAutomationStack extends Stack {
       }
     )
 
+    // Second invoke of the same Lambda, after the Gmail fetch, to see
+    // whether the update changed the bothReceived status. A separate
+    // LambdaInvoke is needed because Step Functions state names must be unique.
+    const recheckEmailsReceivedTask = new LambdaInvoke(
+      this,
+      'Recheck Emails Received Task',
+      {
+        lambdaFunction: checkEmailsReceivedLambda,
+        outputPath: '$.Payload',
+      }
+    )
+
     const updateEmailsReceivedTask = new LambdaInvoke(
       this,
       'Update Emails Received Task',
       {
         lambdaFunction: updateEmailsReceivedLambda,
+        outputPath: '$.Payload',
       }
     )
 
@@ -122,6 +147,17 @@ export class EmailAutomationStack extends Stack {
     })
 
     // Step Functions Workflow
+    //
+    // Linear flow — no loops. The daily EventBridge trigger is the retry
+    // mechanism: if emails aren't in Gmail yet, we exit and try again tomorrow.
+    //
+    //   checkProcessingStatus
+    //     → if COMPLETE: Succeed
+    //     → else: checkEmailsReceived (read DynamoDB)
+    //         → updateEmailsReceived (fetch any missing from Gmail; no-op if none missing)
+    //         → recheckEmailsReceived (re-read DynamoDB)
+    //         → if bothReceived: processEmails
+    //           else: Succeed "Waiting for Emails"
     const definition = checkProcessingStatusTask.next(
       new Choice(this, 'Is Processing Complete?')
         .when(
@@ -129,18 +165,17 @@ export class EmailAutomationStack extends Stack {
           new Succeed(this, 'Processing Complete')
         )
         .otherwise(
-          checkEmailsReceivedTask.next(
-            new Choice(this, 'Are Emails Missing?')
-              .when(
-                Condition.isPresent('$.missingEmails[0]'),
-                updateEmailsReceivedTask.next(checkEmailsReceivedTask)
-              )
-              .when(
-                Condition.booleanEquals('$.bothReceived', true),
-                processEmailsTask
-              )
-              .otherwise(new Succeed(this, 'Waiting for Emails'))
-          )
+          checkEmailsReceivedTask
+            .next(updateEmailsReceivedTask)
+            .next(recheckEmailsReceivedTask)
+            .next(
+              new Choice(this, 'Are Both Received?')
+                .when(
+                  Condition.booleanEquals('$.bothReceived', true),
+                  processEmailsTask
+                )
+                .otherwise(new Succeed(this, 'Waiting for Emails'))
+            )
         )
     )
 

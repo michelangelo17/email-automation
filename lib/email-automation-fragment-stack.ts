@@ -1,4 +1,7 @@
 import { CfnOutput, Stack, StackProps } from 'aws-cdk-lib'
+import { ISecret } from 'aws-cdk-lib/aws-secretsmanager'
+import { IKey } from 'aws-cdk-lib/aws-kms'
+import { PolicyStatement } from 'aws-cdk-lib/aws-iam'
 import { Construct } from 'constructs'
 import { AttributeType, BillingMode, Table } from 'aws-cdk-lib/aws-dynamodb'
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs'
@@ -87,6 +90,7 @@ class UpdateEmailsReceivedFragment extends StateMachineFragment {
       'Update Emails Received Task',
       {
         lambdaFunction: props.lambdaFunction,
+        outputPath: '$.Payload',
       }
     )
 
@@ -150,6 +154,16 @@ class EmailProcessingWorkflowFragment extends StateMachineFragment {
       }
     )
 
+    // Second fragment instance reusing the same Lambda, with a unique
+    // fragment ID so its inner state gets a distinct qualified name.
+    const recheckEmailsReceived = new CheckEmailsReceivedFragment(
+      this,
+      'RecheckEmailsReceived',
+      {
+        lambdaFunction: props.checkEmailsReceivedLambda,
+      }
+    )
+
     const updateEmailsReceived = new UpdateEmailsReceivedFragment(
       this,
       'UpdateEmailsReceived',
@@ -162,6 +176,8 @@ class EmailProcessingWorkflowFragment extends StateMachineFragment {
       lambdaFunction: props.processEmailsLambda,
     })
 
+    // Linear flow — no loops. The daily EventBridge trigger is the retry
+    // mechanism: if emails aren't in Gmail yet, we exit and try again tomorrow.
     const definition = checkProcessingStatus.next(
       new Choice(this, 'Is Processing Complete?')
         .when(
@@ -169,18 +185,17 @@ class EmailProcessingWorkflowFragment extends StateMachineFragment {
           new Succeed(this, 'Processing Complete')
         )
         .otherwise(
-          checkEmailsReceived.next(
-            new Choice(this, 'Are Emails Missing?')
-              .when(
-                Condition.isPresent('$.missingEmails[0]'),
-                updateEmailsReceived.next(checkEmailsReceived)
-              )
-              .when(
-                Condition.booleanEquals('$.bothReceived', true),
-                processEmails
-              )
-              .otherwise(new Succeed(this, 'Waiting for Emails'))
-          )
+          checkEmailsReceived
+            .next(updateEmailsReceived)
+            .next(recheckEmailsReceived)
+            .next(
+              new Choice(this, 'Are Both Received?')
+                .when(
+                  Condition.booleanEquals('$.bothReceived', true),
+                  processEmails
+                )
+                .otherwise(new Succeed(this, 'Waiting for Emails'))
+            )
         )
     )
 
@@ -189,9 +204,28 @@ class EmailProcessingWorkflowFragment extends StateMachineFragment {
   }
 }
 
+export interface EmailAutomationFragmentStackProps extends StackProps {
+  secret: ISecret
+  encryptionKey: IKey
+}
+
 export class EmailAutomationFragmentStack extends Stack {
-  constructor(scope: Construct, id: string, props?: StackProps) {
+  constructor(
+    scope: Construct,
+    id: string,
+    props: EmailAutomationFragmentStackProps
+  ) {
     super(scope, id, props)
+    const { secret, encryptionKey } = props
+
+    const secretReadPolicy = new PolicyStatement({
+      actions: ['secretsmanager:GetSecretValue'],
+      resources: [secret.secretArn],
+    })
+    const kmsDecryptPolicy = new PolicyStatement({
+      actions: ['kms:Decrypt'],
+      resources: [encryptionKey.keyArn],
+    })
 
     // DynamoDB: Emails Received Table
     const emailsReceivedTable = new Table(this, 'EmailsReceivedTable', {
@@ -252,15 +286,13 @@ export class EmailAutomationFragmentStack extends Stack {
         ),
         environment: {
           EMAILS_TABLE_NAME: emailsReceivedTable.tableName,
-          GMAIL_CLIENT_ID: process.env.GMAIL_CLIENT_ID!,
-          GMAIL_CLIENT_SECRET: process.env.GMAIL_CLIENT_SECRET!,
-          GMAIL_REFRESH_TOKEN: process.env.GMAIL_REFRESH_TOKEN!,
-          BVG_EMAIL: process.env.BVG_EMAIL!,
-          CHARGES_EMAIL: process.env.CHARGES_EMAIL!,
+          SECRET_ARN: secret.secretArn,
         },
       }
     )
     emailsReceivedTable.grantReadWriteData(updateEmailsReceivedLambda)
+    updateEmailsReceivedLambda.addToRolePolicy(secretReadPolicy)
+    updateEmailsReceivedLambda.addToRolePolicy(kmsDecryptPolicy)
 
     // Lambda: Process Emails
     const processEmailsLambda = new NodejsFunction(this, 'processEmails', {
@@ -269,18 +301,14 @@ export class EmailAutomationFragmentStack extends Stack {
       environment: {
         PROCESSING_TABLE_NAME: processingStatusTable.tableName,
         EMAILS_TABLE_NAME: emailsReceivedTable.tableName,
-        GMAIL_CLIENT_ID: process.env.GMAIL_CLIENT_ID!,
-        GMAIL_CLIENT_SECRET: process.env.GMAIL_CLIENT_SECRET!,
-        GMAIL_REFRESH_TOKEN: process.env.GMAIL_REFRESH_TOKEN!,
-        TARGET_EMAIL: process.env.TARGET_EMAIL!,
-        MY_EMAIL: process.env.MY_EMAIL!,
-        BVG_EMAIL: process.env.BVG_EMAIL!,
-        CHARGES_EMAIL: process.env.CHARGES_EMAIL!,
+        SECRET_ARN: secret.secretArn,
       },
       timeout: Duration.seconds(30),
     })
     processingStatusTable.grantReadWriteData(processEmailsLambda)
     emailsReceivedTable.grantReadWriteData(processEmailsLambda)
+    processEmailsLambda.addToRolePolicy(secretReadPolicy)
+    processEmailsLambda.addToRolePolicy(kmsDecryptPolicy)
 
     // Create the workflow fragment
     const workflow = new EmailProcessingWorkflowFragment(

@@ -1,18 +1,20 @@
 import { DynamoDB } from '@aws-sdk/client-dynamodb'
 import { google } from 'googleapis'
 import { getGmailDateQuery } from './utils/dateUtils'
+import { getSecrets } from './utils/secrets'
 
 const dynamo = new DynamoDB({})
 const tableName = process.env.EMAILS_TABLE_NAME!
 
 export const handler = async (event: any) => {
+  const secrets = await getSecrets()
   const oauth2Client = new google.auth.OAuth2(
-    process.env.GMAIL_CLIENT_ID!,
-    process.env.GMAIL_CLIENT_SECRET!
+    secrets.GMAIL_CLIENT_ID,
+    secrets.GMAIL_CLIENT_SECRET
   )
 
   oauth2Client.setCredentials({
-    refresh_token: process.env.GMAIL_REFRESH_TOKEN!,
+    refresh_token: secrets.GMAIL_REFRESH_TOKEN,
   })
 
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client })
@@ -34,8 +36,8 @@ export const handler = async (event: any) => {
     for (const emailType of missingEmails) {
       const query =
         emailType === 'BVG'
-          ? `to:${process.env.BVG_EMAIL} ${getGmailDateQuery(now)}`
-          : `to:${process.env.CHARGES_EMAIL} ${getGmailDateQuery(now)}`
+          ? `to:${secrets.BVG_EMAIL} ${getGmailDateQuery(now)}`
+          : `to:${secrets.CHARGES_EMAIL} ${getGmailDateQuery(now)}`
       const res = await gmail.users.messages.list({ userId: 'me', q: query })
 
       if (res.data.messages && res.data.messages.length > 0) {

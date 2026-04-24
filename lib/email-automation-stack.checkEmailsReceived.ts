@@ -7,7 +7,7 @@ export const handler = async () => {
   const now = new Date()
   const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
     2,
-    '0'
+    '0',
   )}`
 
   try {
@@ -23,10 +23,10 @@ export const handler = async () => {
 
     const items = result.Items || []
     const bvgReceived = items.some(
-      (item) => item.EmailType.S === 'BVG' && item.Received?.BOOL === true
+      (item) => item.EmailType.S === 'BVG' && item.Received?.BOOL === true,
     )
     const chargesReceived = items.some(
-      (item) => item.EmailType.S === 'Charges' && item.Received?.BOOL === true
+      (item) => item.EmailType.S === 'Charges' && item.Received?.BOOL === true,
     )
 
     const missingEmails = []

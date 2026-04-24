@@ -57,6 +57,26 @@ Create a `.env` file in the project root with the following variables:
 
 Note: All email addresses must be valid and verified in your Gmail account.
 
+## Secret management (cdk-gitify-secrets)
+
+Secrets are managed via [cdk-gitify-secrets](https://github.com/michelangelo17/cdk-gitify-secrets): values live in AWS Secrets Manager with a propose → approve workflow. Lambdas read the secret at runtime; nothing is baked into CloudFormation.
+
+**Required keys in the secret** (same as the env vars above): `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, `BVG_EMAIL`, `CHARGES_EMAIL`, `TARGET_EMAIL`, `MY_EMAIL`.
+
+**Deploy and demo flow:**
+
+1. Deploy the SecretReview stack: `npx cdk deploy SecretReviewStack`
+2. Create a Cognito user (see [cdk-gitify-secrets README](https://github.com/michelangelo17/cdk-gitify-secrets#adding-users))
+3. Configure the CLI: `sr configure --api-url <ApiUrl> --region <region> --client-id <id> --user-pool-id <id>` (from stack outputs)
+4. Log in: `sr login`
+5. Propose secrets from your `.env`: `sr propose -p email-automation -e production -r "Initial secrets"`
+6. Open the dashboard (FrontendUrl from stack outputs), approve the change
+7. Deploy the app stacks: `npx cdk deploy EmailAutomationStack` (and `EmailAutomationFragmentStack` if you use it)
+
+**Ongoing:** Use `sr pull -p email-automation -e production` to refresh local `.env`; use `sr history` and `sr status` to inspect the workflow.
+
+Ensure the SecretReview stack is deployed and the secret is proposed and approved before deploying the app stacks, or Lambdas will fail at runtime when fetching the secret.
+
 ## Installation
 
 1. Clone the repository
@@ -74,10 +94,13 @@ yarn build
 
 ## Deployment
 
-Deploy the stack to your AWS account:
+Deploy in order: first the SecretReview stack and propose/approve secrets (see [Secret management](#secret-management-cdk-gitify-secrets)), then the app stacks:
 
 ```bash
-npx cdk deploy
+npx cdk deploy SecretReviewStack
+# ... then sr propose, approve in dashboard ...
+npx cdk deploy EmailAutomationStack
+npx cdk deploy EmailAutomationFragmentStack   # optional
 ```
 
 ## Troubleshooting
@@ -129,7 +152,7 @@ Common issues and solutions:
 
 ## Security
 
-- All sensitive information is stored in environment variables
+- Gmail and email-address secrets are stored in AWS Secrets Manager and read by Lambdas at runtime (via cdk-gitify-secrets); they are not in CloudFormation or env vars
 - DynamoDB tables use encryption at rest
 - Lambda functions use minimal IAM permissions
 - Gmail API uses OAuth2 authentication

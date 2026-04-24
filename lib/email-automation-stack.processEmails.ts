@@ -1,11 +1,13 @@
 import { DynamoDB } from '@aws-sdk/client-dynamodb'
 import { google } from 'googleapis'
 import { getGmailDateQuery } from './utils/dateUtils'
+import { getSecrets } from './utils/secrets'
 
 const dynamo = new DynamoDB({})
 const tableName = process.env.PROCESSING_TABLE_NAME!
 
 export const handler = async (event: any) => {
+  const secrets = await getSecrets()
   const now = new Date()
   const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
     2,
@@ -13,19 +15,19 @@ export const handler = async (event: any) => {
   )}`
 
   const oauth2Client = new google.auth.OAuth2(
-    process.env.GMAIL_CLIENT_ID!,
-    process.env.GMAIL_CLIENT_SECRET!
+    secrets.GMAIL_CLIENT_ID,
+    secrets.GMAIL_CLIENT_SECRET
   )
 
   oauth2Client.setCredentials({
-    refresh_token: process.env.GMAIL_REFRESH_TOKEN!,
+    refresh_token: secrets.GMAIL_REFRESH_TOKEN,
   })
 
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client })
 
   try {
     // 1. Get BVG email
-    const bvgQuery = `to:${process.env.BVG_EMAIL} ${getGmailDateQuery(now)}`
+    const bvgQuery = `to:${secrets.BVG_EMAIL} ${getGmailDateQuery(now)}`
     const bvgRes = await gmail.users.messages.list({
       userId: 'me',
       q: bvgQuery,
@@ -49,7 +51,7 @@ export const handler = async (event: any) => {
       : 'No BVG content found'
 
     // 2. Get Charges email
-    const chargesQuery = `to:${process.env.CHARGES_EMAIL} ${getGmailDateQuery(
+    const chargesQuery = `to:${secrets.CHARGES_EMAIL} ${getGmailDateQuery(
       now
     )}`
     const chargesRes = await gmail.users.messages.list({
@@ -97,8 +99,8 @@ export const handler = async (event: any) => {
     const boundary = `boundary-${Date.now()}`
     const emailContent = [
       `From: me`,
-      `To: ${process.env.TARGET_EMAIL}`,
-      `Cc: ${process.env.MY_EMAIL}`,
+      `To: ${secrets.TARGET_EMAIL}`,
+      `Cc: ${secrets.MY_EMAIL}`,
       `Subject: Deutschlandticket ${monthKey}`,
       `MIME-Version: 1.0`,
       `Content-Type: multipart/mixed; boundary="${boundary}"`,
