@@ -10,7 +10,7 @@ export const handler = async (event: any) => {
   const secrets = await getSecrets()
   const oauth2Client = new google.auth.OAuth2(
     secrets.GMAIL_CLIENT_ID,
-    secrets.GMAIL_CLIENT_SECRET
+    secrets.GMAIL_CLIENT_SECRET,
   )
 
   oauth2Client.setCredentials({
@@ -23,13 +23,13 @@ export const handler = async (event: any) => {
 
   if (!missingEmails || missingEmails.length === 0) {
     console.log('No missing emails to fetch.')
-    return
+    return {}
   }
 
   const now = new Date()
   const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
     2,
-    '0'
+    '0',
   )}`
 
   try {
@@ -65,6 +65,7 @@ export const handler = async (event: any) => {
     }
 
     console.log('Emails received table updated.')
+    return {}
   } catch (error) {
     console.error('Error updating emails received:', error)
     throw error
