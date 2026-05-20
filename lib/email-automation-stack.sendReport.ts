@@ -1,23 +1,34 @@
 import { google } from 'googleapis'
 import { getSecrets } from './utils/secrets'
 
-// Each Map iteration produces a result with one of these shapes:
-//   - { monthKey, status: 'COMPLETE' }           — already processed, skipped
-//   - { monthKey, processed: true }              — processed in this run
+// Each Map iteration produces one of these shapes:
+//   - { monthKey, status: 'COMPLETE', ... }           — already processed
+//   - { monthKey, processed: true }                   — processed in this run
 //   - { monthKey, processed: false,
-//       skippedReason: 'already-sent' }          — Sent-folder dedup hit
-//   - { monthKey, status: 'WAITING',
-//       missingEmails: ['BVG' | 'Charges' ...] } — source emails missing
+//       skippedReason: 'already-sent' }               — Sent-folder dedup hit
+//   - { monthKey, status: 'PENDING',
+//       bvgMessageId?, chargesMessageId? }            — waiting (one or both
+//                                                       source emails missing)
 interface MonthResult {
   monthKey: string
   status?: string
   processed?: boolean
   skippedReason?: string
-  missingEmails?: string[]
+  bvgMessageId?: string
+  chargesMessageId?: string
+  missingEmails?: string[] // legacy / future-friendly
 }
 
-const describeMissing = (missing: string[]): string => {
-  if (!missing || missing.length === 0) return 'status unknown'
+function computeMissing(r: MonthResult): string[] {
+  if (r.missingEmails && r.missingEmails.length > 0) return r.missingEmails
+  const missing: string[] = []
+  if (!r.bvgMessageId) missing.push('BVG')
+  if (!r.chargesMessageId) missing.push('Charges')
+  return missing
+}
+
+function describeMissing(missing: string[]): string {
+  if (missing.length === 0) return 'status unknown'
   if (missing.length === 2) return 'BVG and Charges missing'
   return `${missing[0]} missing`
 }
@@ -40,7 +51,6 @@ export const handler = async (event: {
     return { reportSent: false, incomplete: 0, total: results.length }
   }
 
-  // Stable sort by monthKey so the report is easy to read
   incomplete.sort((a, b) => a.monthKey.localeCompare(b.monthKey))
 
   const secrets = await getSecrets()
@@ -52,7 +62,7 @@ export const handler = async (event: {
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client })
 
   const lines = incomplete.map(
-    (r) => `  ${r.monthKey}  ->  ${describeMissing(r.missingEmails || [])}`,
+    (r) => `  ${r.monthKey}  ->  ${describeMissing(computeMissing(r))}`,
   )
 
   const body = [

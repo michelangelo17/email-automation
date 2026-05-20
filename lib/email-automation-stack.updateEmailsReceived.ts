@@ -5,6 +5,7 @@ import {
   getGmailDateQuery,
   getMonthKey,
 } from './utils/dateUtils'
+import { findMessageIdByAliasForMonth } from './utils/gmail'
 import { getSecrets } from './utils/secrets'
 
 const dynamo = new DynamoDB({})
@@ -40,14 +41,28 @@ export const handler = async (
 
   try {
     for (const emailType of missingEmails) {
-      const query =
-        emailType === 'BVG'
-          ? `to:${secrets.BVG_EMAIL} ${getGmailDateQuery(targetDate)}`
-          : `to:${secrets.CHARGES_EMAIL} ${getGmailDateQuery(targetDate)}`
-      const res = await gmail.users.messages.list({ userId: 'me', q: query })
+      // Gmail's search collapses our aliases (bvg@, bvgcharges@ are aliases
+      // of the primary account), and a backfill forward sent today lives in
+      // today's date range despite being for an old month. The month-aware
+      // helper does a broad list, checks each message's actual recipient
+      // headers client-side, AND parses each message's target month so that
+      // we only accept matches whose target month equals `monthKey`.
+      const alias =
+        emailType === 'BVG' ? secrets.BVG_EMAIL : secrets.CHARGES_EMAIL
+      const dateRange = getGmailDateQuery(targetDate)
+      // Narrow Charges with has:attachment since we require an image
+      // attachment downstream; this trims the scan substantially.
+      const baseQuery =
+        emailType === 'Charges' ? `has:attachment ${dateRange}` : dateRange
 
-      if (res.data.messages && res.data.messages.length > 0) {
-        const messageId = res.data.messages[0].id!
+      const messageId = await findMessageIdByAliasForMonth(
+        gmail,
+        alias,
+        monthKey,
+        baseQuery,
+      )
+
+      if (messageId) {
         console.log(
           `${emailType} email found for ${monthKey} with ID: ${messageId}`,
         )

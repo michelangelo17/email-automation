@@ -5,6 +5,7 @@ import {
   getGmailDateQuery,
   getMonthKey,
 } from './utils/dateUtils'
+import { findMessageIdByAliasForMonth } from './utils/gmail'
 import { getSecrets } from './utils/secrets'
 
 const dynamo = new DynamoDB({})
@@ -26,7 +27,13 @@ const markProcessingComplete = async (monthKey: string) => {
   })
 }
 
-export const handler = async (event: { monthKey?: string } = {}) => {
+export const handler = async (
+  event: {
+    monthKey?: string
+    bvgMessageId?: string
+    chargesMessageId?: string
+  } = {},
+) => {
   const secrets = await getSecrets()
   const monthKey = event.monthKey || getMonthKey(new Date())
   const targetDate = event.monthKey
@@ -62,20 +69,30 @@ export const handler = async (event: { monthKey?: string } = {}) => {
       return { monthKey, processed: false, skippedReason: 'already-sent' }
     }
 
-    // 1. Get BVG email
-    const bvgQuery = `to:${secrets.BVG_EMAIL} ${getGmailDateQuery(targetDate)}`
-    const bvgRes = await gmail.users.messages.list({
-      userId: 'me',
-      q: bvgQuery,
-    })
+    // 1. Get BVG email.
+    //    In backfill mode, scanBackfillEmails has already resolved the
+    //    message ID via subject/body/internalDate heuristics. In daily mode
+    //    no ID is passed in, and we fall back to findMessageIdByAliasForMonth,
+    //    which scans the current month's date range AND filters out any
+    //    candidate whose parsed target month is something else (e.g., a
+    //    backfill forward that arrived today but represents an old month).
+    const dateRange = getGmailDateQuery(targetDate)
+    const bvgMessageId =
+      event.bvgMessageId ||
+      (await findMessageIdByAliasForMonth(
+        gmail,
+        secrets.BVG_EMAIL,
+        monthKey,
+        dateRange,
+      ))
 
-    if (!bvgRes.data.messages || bvgRes.data.messages.length === 0) {
+    if (!bvgMessageId) {
       throw new Error(`BVG email not found for ${monthKey}`)
     }
 
     const bvgMessage = await gmail.users.messages.get({
       userId: 'me',
-      id: bvgRes.data.messages[0].id!,
+      id: bvgMessageId,
       format: 'full',
     })
 
@@ -86,22 +103,25 @@ export const handler = async (event: { monthKey?: string } = {}) => {
       ? Buffer.from(bvgHtmlPart.body.data, 'base64').toString('utf-8')
       : 'No BVG content found'
 
-    // 2. Get Charges email
-    const chargesQuery = `to:${secrets.CHARGES_EMAIL} ${getGmailDateQuery(
-      targetDate,
-    )}`
-    const chargesRes = await gmail.users.messages.list({
-      userId: 'me',
-      q: chargesQuery,
-    })
+    // 2. Get Charges email — narrow with has:attachment since we need the
+    //    image attachment downstream anyway. Same month-aware filtering as
+    //    BVG above.
+    const chargesMessageId =
+      event.chargesMessageId ||
+      (await findMessageIdByAliasForMonth(
+        gmail,
+        secrets.CHARGES_EMAIL,
+        monthKey,
+        `has:attachment ${dateRange}`,
+      ))
 
-    if (!chargesRes.data.messages || chargesRes.data.messages.length === 0) {
+    if (!chargesMessageId) {
       throw new Error(`Charges email not found for ${monthKey}`)
     }
 
     const chargesMessage = await gmail.users.messages.get({
       userId: 'me',
-      id: chargesRes.data.messages[0].id!,
+      id: chargesMessageId,
       format: 'full',
     })
 
@@ -116,7 +136,7 @@ export const handler = async (event: { monthKey?: string } = {}) => {
     // 3. Fetch the image attachment
     const attachment = await gmail.users.messages.attachments.get({
       userId: 'me',
-      messageId: chargesRes.data.messages[0].id!,
+      messageId: chargesMessageId,
       id: imagePart.body.attachmentId!,
     })
 

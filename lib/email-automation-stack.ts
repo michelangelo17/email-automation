@@ -75,6 +75,8 @@ export class EmailAutomationStack extends Stack {
     emailsReceivedTable.grantReadWriteData(checkEmailsReceivedLambda)
 
     // Lambda: Update Emails Received
+    //   Per-message header scan via findMessageIdByAlias means we make up to
+    //   ~100 metadata calls per alias check — 60s gives plenty of headroom.
     const updateEmailsReceivedLambda = new NodejsFunction(
       this,
       'updateEmailsReceived',
@@ -83,6 +85,7 @@ export class EmailAutomationStack extends Stack {
           EMAILS_TABLE_NAME: emailsReceivedTable.tableName,
           SECRET_ARN: secret.secretArn,
         },
+        timeout: Duration.seconds(60),
       }
     )
     emailsReceivedTable.grantReadWriteData(updateEmailsReceivedLambda)
@@ -90,13 +93,16 @@ export class EmailAutomationStack extends Stack {
     updateEmailsReceivedLambda.addToRolePolicy(kmsDecryptPolicy)
 
     // Lambda: Process Emails
+    //   Does multiple Gmail calls per run: Sent dedup search, two alias
+    //   header scans (~100 metadata calls each), full message fetch x2,
+    //   attachment fetch, and the send. 90s is comfortable.
     const processEmailsLambda = new NodejsFunction(this, 'processEmails', {
       environment: {
         PROCESSING_TABLE_NAME: processingStatusTable.tableName,
         EMAILS_TABLE_NAME: emailsReceivedTable.tableName,
         SECRET_ARN: secret.secretArn,
       },
-      timeout: Duration.seconds(30),
+      timeout: Duration.seconds(90),
     })
     processingStatusTable.grantReadWriteData(processEmailsLambda)
     emailsReceivedTable.grantReadWriteData(processEmailsLambda)
@@ -205,15 +211,26 @@ export class EmailAutomationStack extends Stack {
     // existing behavior without changes.
     // ========================================================================
 
-    const generateMonthsToCheckLambda = new NodejsFunction(
+    // scanBackfillEmails — combines month-list generation with a Gmail scan
+    // that pre-resolves BVG/Charges message IDs per target month using the
+    // subject / forwarded-Date / internalDate strategies in
+    // listForwardedEmailsByAlias. Needs Gmail credentials so it reads the
+    // secret like the other Gmail-touching Lambdas. 5 min timeout because
+    // it does up to ~500 full message fetches per alias.
+    const scanBackfillEmailsLambda = new NodejsFunction(
       this,
-      'generateMonthsToCheck',
+      'scanBackfillEmails',
       {
         environment: {
           LOOKBACK_START_MONTH: '2025-01',
+          SECRET_ARN: secret.secretArn,
         },
+        timeout: Duration.minutes(5),
+        memorySize: 512,
       },
     )
+    scanBackfillEmailsLambda.addToRolePolicy(secretReadPolicy)
+    scanBackfillEmailsLambda.addToRolePolicy(kmsDecryptPolicy)
 
     const sendReportLambda = new NodejsFunction(this, 'sendReport', {
       environment: {
@@ -227,11 +244,11 @@ export class EmailAutomationStack extends Stack {
     // Per-state-machine task instances — Step Functions requires unique state
     // names across the entire state machine, and we can't reuse the daily
     // SM's task instances here.
-    const bfGenerateMonthsTask = new LambdaInvoke(
+    const bfScanBackfillEmailsTask = new LambdaInvoke(
       this,
-      'Backfill Generate Months Task',
+      'Backfill Scan Emails Task',
       {
-        lambdaFunction: generateMonthsToCheckLambda,
+        lambdaFunction: scanBackfillEmailsLambda,
         outputPath: '$.Payload',
       },
     )
@@ -241,33 +258,6 @@ export class EmailAutomationStack extends Stack {
       'Backfill Check Processing Status Task',
       {
         lambdaFunction: checkProcessingStatusLambda,
-        outputPath: '$.Payload',
-      },
-    )
-
-    const bfCheckEmailsReceivedTask = new LambdaInvoke(
-      this,
-      'Backfill Check Emails Received Task',
-      {
-        lambdaFunction: checkEmailsReceivedLambda,
-        outputPath: '$.Payload',
-      },
-    )
-
-    const bfUpdateEmailsReceivedTask = new LambdaInvoke(
-      this,
-      'Backfill Update Emails Received Task',
-      {
-        lambdaFunction: updateEmailsReceivedLambda,
-        outputPath: '$.Payload',
-      },
-    )
-
-    const bfRecheckEmailsReceivedTask = new LambdaInvoke(
-      this,
-      'Backfill Recheck Emails Received Task',
-      {
-        lambdaFunction: checkEmailsReceivedLambda,
         outputPath: '$.Payload',
       },
     )
@@ -290,40 +280,31 @@ export class EmailAutomationStack extends Stack {
       },
     )
 
-    // Per-month branch — runs inside the Map iterator, one execution per
-    // month. Terminal states emit a consistent shape that sendReport can
-    // interpret.
+    // Per-month branch — runs inside the Map iterator with one
+    // { monthKey, bvgMessageId?, chargesMessageId? } per iteration.
+    //
+    //   checkProcessingStatus (preserves input fields, adds status)
+    //     → COMPLETE: Pass through (sendReport will skip these)
+    //     → else: do we have both message IDs from the scan?
+    //         → yes: processEmails using those IDs (or Sent-folder dedup)
+    //         → no:  Pass through; sendReport will flag the missing
+    //                source emails based on which IDs are absent
     const perMonthBranch = bfCheckProcessingStatusTask.next(
       new Choice(this, 'Backfill: Is Month Complete?')
         .when(
           Condition.stringEquals('$.status', 'COMPLETE'),
-          new Pass(this, 'Backfill: Month Already Complete', {
-            parameters: {
-              'monthKey.$': '$.monthKey',
-              status: 'COMPLETE',
-            },
-          }),
+          new Pass(this, 'Backfill: Month Already Complete'),
         )
         .otherwise(
-          bfCheckEmailsReceivedTask
-            .next(bfUpdateEmailsReceivedTask)
-            .next(bfRecheckEmailsReceivedTask)
-            .next(
-              new Choice(this, 'Backfill: Are Both Received?')
-                .when(
-                  Condition.booleanEquals('$.bothReceived', true),
-                  bfProcessEmailsTask,
-                )
-                .otherwise(
-                  new Pass(this, 'Backfill: Month Waiting', {
-                    parameters: {
-                      'monthKey.$': '$.monthKey',
-                      'missingEmails.$': '$.missingEmails',
-                      status: 'WAITING',
-                    },
-                  }),
-                ),
-            ),
+          new Choice(this, 'Backfill: Are Both Emails Found?')
+            .when(
+              Condition.and(
+                Condition.isPresent('$.bvgMessageId'),
+                Condition.isPresent('$.chargesMessageId'),
+              ),
+              bfProcessEmailsTask,
+            )
+            .otherwise(new Pass(this, 'Backfill: Month Waiting')),
         ),
     )
 
@@ -337,7 +318,7 @@ export class EmailAutomationStack extends Stack {
     })
     monthMap.itemProcessor(perMonthBranch)
 
-    const backfillDefinition = bfGenerateMonthsTask
+    const backfillDefinition = bfScanBackfillEmailsTask
       .next(monthMap)
       .next(bfSendReportTask)
 
