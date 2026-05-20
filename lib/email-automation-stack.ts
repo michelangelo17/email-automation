@@ -12,6 +12,8 @@ import {
   Choice,
   Succeed,
   Condition,
+  Map,
+  Pass,
 } from 'aws-cdk-lib/aws-stepfunctions'
 import { LambdaInvoke } from 'aws-cdk-lib/aws-stepfunctions-tasks'
 import { Duration } from 'aws-cdk-lib'
@@ -190,9 +192,171 @@ export class EmailAutomationStack extends Stack {
 
     dailyRule.addTarget(new SfnStateMachine(stateMachine))
 
+    // ========================================================================
+    // Backfill state machine — manually triggered.
+    //
+    // Iterates over every month from LOOKBACK_START_MONTH through the current
+    // month, running the same per-month pipeline as the daily flow. At the
+    // end, sends an email report listing any months where source emails are
+    // still missing in Gmail, so the user can locate and forward them.
+    //
+    // The per-month Lambdas accept `monthKey` from event input and fall back
+    // to "today's month" when absent — that preserves the daily flow's
+    // existing behavior without changes.
+    // ========================================================================
+
+    const generateMonthsToCheckLambda = new NodejsFunction(
+      this,
+      'generateMonthsToCheck',
+      {
+        environment: {
+          LOOKBACK_START_MONTH: '2025-01',
+        },
+      },
+    )
+
+    const sendReportLambda = new NodejsFunction(this, 'sendReport', {
+      environment: {
+        SECRET_ARN: secret.secretArn,
+      },
+      timeout: Duration.seconds(30),
+    })
+    sendReportLambda.addToRolePolicy(secretReadPolicy)
+    sendReportLambda.addToRolePolicy(kmsDecryptPolicy)
+
+    // Per-state-machine task instances — Step Functions requires unique state
+    // names across the entire state machine, and we can't reuse the daily
+    // SM's task instances here.
+    const bfGenerateMonthsTask = new LambdaInvoke(
+      this,
+      'Backfill Generate Months Task',
+      {
+        lambdaFunction: generateMonthsToCheckLambda,
+        outputPath: '$.Payload',
+      },
+    )
+
+    const bfCheckProcessingStatusTask = new LambdaInvoke(
+      this,
+      'Backfill Check Processing Status Task',
+      {
+        lambdaFunction: checkProcessingStatusLambda,
+        outputPath: '$.Payload',
+      },
+    )
+
+    const bfCheckEmailsReceivedTask = new LambdaInvoke(
+      this,
+      'Backfill Check Emails Received Task',
+      {
+        lambdaFunction: checkEmailsReceivedLambda,
+        outputPath: '$.Payload',
+      },
+    )
+
+    const bfUpdateEmailsReceivedTask = new LambdaInvoke(
+      this,
+      'Backfill Update Emails Received Task',
+      {
+        lambdaFunction: updateEmailsReceivedLambda,
+        outputPath: '$.Payload',
+      },
+    )
+
+    const bfRecheckEmailsReceivedTask = new LambdaInvoke(
+      this,
+      'Backfill Recheck Emails Received Task',
+      {
+        lambdaFunction: checkEmailsReceivedLambda,
+        outputPath: '$.Payload',
+      },
+    )
+
+    const bfProcessEmailsTask = new LambdaInvoke(
+      this,
+      'Backfill Process Emails Task',
+      {
+        lambdaFunction: processEmailsLambda,
+        outputPath: '$.Payload',
+      },
+    )
+
+    const bfSendReportTask = new LambdaInvoke(
+      this,
+      'Backfill Send Report Task',
+      {
+        lambdaFunction: sendReportLambda,
+        outputPath: '$.Payload',
+      },
+    )
+
+    // Per-month branch — runs inside the Map iterator, one execution per
+    // month. Terminal states emit a consistent shape that sendReport can
+    // interpret.
+    const perMonthBranch = bfCheckProcessingStatusTask.next(
+      new Choice(this, 'Backfill: Is Month Complete?')
+        .when(
+          Condition.stringEquals('$.status', 'COMPLETE'),
+          new Pass(this, 'Backfill: Month Already Complete', {
+            parameters: {
+              'monthKey.$': '$.monthKey',
+              status: 'COMPLETE',
+            },
+          }),
+        )
+        .otherwise(
+          bfCheckEmailsReceivedTask
+            .next(bfUpdateEmailsReceivedTask)
+            .next(bfRecheckEmailsReceivedTask)
+            .next(
+              new Choice(this, 'Backfill: Are Both Received?')
+                .when(
+                  Condition.booleanEquals('$.bothReceived', true),
+                  bfProcessEmailsTask,
+                )
+                .otherwise(
+                  new Pass(this, 'Backfill: Month Waiting', {
+                    parameters: {
+                      'monthKey.$': '$.monthKey',
+                      'missingEmails.$': '$.missingEmails',
+                      status: 'WAITING',
+                    },
+                  }),
+                ),
+            ),
+        ),
+    )
+
+    // Map state — iterate over the months list. maxConcurrency: 1 keeps
+    // execution sequential, which keeps Gmail rate-limit risk minimal and
+    // produces a readable execution timeline.
+    const monthMap = new Map(this, 'Backfill: For Each Month', {
+      itemsPath: '$.months',
+      maxConcurrency: 1,
+      resultPath: '$.results',
+    })
+    monthMap.itemProcessor(perMonthBranch)
+
+    const backfillDefinition = bfGenerateMonthsTask
+      .next(monthMap)
+      .next(bfSendReportTask)
+
+    const backfillStateMachine = new StateMachine(
+      this,
+      'EmailBackfillStateMachine',
+      {
+        definition: backfillDefinition,
+      },
+    )
+
     // Outputs
     new CfnOutput(this, 'StateMachineArn', {
       value: stateMachine.stateMachineArn,
+    })
+    new CfnOutput(this, 'BackfillStateMachineArn', {
+      value: backfillStateMachine.stateMachineArn,
+      description:
+        'Manually trigger with: aws stepfunctions start-execution --state-machine-arn <this-arn>',
     })
   }
 }

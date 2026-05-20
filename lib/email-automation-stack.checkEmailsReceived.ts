@@ -1,14 +1,11 @@
 import { DynamoDB } from '@aws-sdk/client-dynamodb'
+import { getMonthKey } from './utils/dateUtils'
 
 const dynamo = new DynamoDB({})
 const tableName = process.env.EMAILS_TABLE_NAME!
 
-export const handler = async () => {
-  const now = new Date()
-  const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
-    2,
-    '0',
-  )}`
+export const handler = async (event: { monthKey?: string } = {}) => {
+  const monthKey = event.monthKey || getMonthKey(new Date())
 
   try {
     console.log(`Checking emails received for ${monthKey}.`)
@@ -29,15 +26,17 @@ export const handler = async () => {
       (item) => item.EmailType.S === 'Charges' && item.Received?.BOOL === true,
     )
 
-    const missingEmails = []
+    const missingEmails: string[] = []
     if (!bvgReceived) missingEmails.push('BVG')
     if (!chargesReceived) missingEmails.push('Charges')
 
     const bothReceived = bvgReceived && chargesReceived
 
-    console.log(`Missing emails: ${missingEmails.join(', ') || 'None'}`)
+    console.log(
+      `Missing emails for ${monthKey}: ${missingEmails.join(', ') || 'None'}`,
+    )
 
-    return { missingEmails, bothReceived }
+    return { monthKey, missingEmails, bothReceived }
   } catch (error) {
     console.error('Error checking emails received:', error)
     throw error

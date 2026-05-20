@@ -1,12 +1,18 @@
 import { DynamoDB } from '@aws-sdk/client-dynamodb'
 import { google } from 'googleapis'
-import { getGmailDateQuery } from './utils/dateUtils'
+import {
+  dateFromMonthKey,
+  getGmailDateQuery,
+  getMonthKey,
+} from './utils/dateUtils'
 import { getSecrets } from './utils/secrets'
 
 const dynamo = new DynamoDB({})
 const tableName = process.env.EMAILS_TABLE_NAME!
 
-export const handler = async (event: any) => {
+export const handler = async (
+  event: { monthKey?: string; missingEmails?: string[] } = {},
+) => {
   const secrets = await getSecrets()
   const oauth2Client = new google.auth.OAuth2(
     secrets.GMAIL_CLIENT_ID,
@@ -20,32 +26,31 @@ export const handler = async (event: any) => {
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client })
 
   const { missingEmails } = event
+  const monthKey = event.monthKey || getMonthKey(new Date())
+  const targetDate = event.monthKey
+    ? dateFromMonthKey(event.monthKey)
+    : new Date()
 
   if (!missingEmails || missingEmails.length === 0) {
-    console.log('No missing emails to fetch.')
-    return {}
+    console.log(`No missing emails to fetch for ${monthKey}.`)
+    // Return an object (not undefined) so downstream outputPath: '$.Payload'
+    // resolves to {monthKey} rather than null.
+    return { monthKey }
   }
-
-  const now = new Date()
-  const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
-    2,
-    '0',
-  )}`
 
   try {
     for (const emailType of missingEmails) {
       const query =
         emailType === 'BVG'
-          ? `to:${secrets.BVG_EMAIL} ${getGmailDateQuery(now)}`
-          : `to:${secrets.CHARGES_EMAIL} ${getGmailDateQuery(now)}`
+          ? `to:${secrets.BVG_EMAIL} ${getGmailDateQuery(targetDate)}`
+          : `to:${secrets.CHARGES_EMAIL} ${getGmailDateQuery(targetDate)}`
       const res = await gmail.users.messages.list({ userId: 'me', q: query })
 
       if (res.data.messages && res.data.messages.length > 0) {
-        console.log(`${emailType} email found.`)
-
-        // Get the full message content
         const messageId = res.data.messages[0].id!
-        console.log(`${emailType} email found with ID: ${messageId}`)
+        console.log(
+          `${emailType} email found for ${monthKey} with ID: ${messageId}`,
+        )
 
         await dynamo.updateItem({
           TableName: tableName,
@@ -56,16 +61,16 @@ export const handler = async (event: any) => {
           },
           ExpressionAttributeValues: {
             ':received': { BOOL: true },
-            ':timestamp': { S: now.toISOString() },
+            ':timestamp': { S: new Date().toISOString() },
           },
         })
       } else {
-        console.log(`${emailType} email not found.`)
+        console.log(`${emailType} email not found for ${monthKey}.`)
       }
     }
 
-    console.log('Emails received table updated.')
-    return {}
+    console.log(`Emails received table updated for ${monthKey}.`)
+    return { monthKey }
   } catch (error) {
     console.error('Error updating emails received:', error)
     throw error

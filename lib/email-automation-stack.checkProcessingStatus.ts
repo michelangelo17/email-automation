@@ -1,14 +1,11 @@
 import { DynamoDB } from '@aws-sdk/client-dynamodb'
+import { getMonthKey } from './utils/dateUtils'
 
 const dynamo = new DynamoDB({})
 const tableName = process.env.PROCESSING_TABLE_NAME!
 
-export const handler = async () => {
-  const now = new Date()
-  const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
-    2,
-    '0'
-  )}`
+export const handler = async (event: { monthKey?: string } = {}) => {
+  const monthKey = event.monthKey || getMonthKey(new Date())
 
   try {
     console.log(`Checking processing status for ${monthKey}.`)
@@ -23,7 +20,7 @@ export const handler = async () => {
     const status = result.Item?.Status?.S || 'PENDING'
 
     console.log(`Processing status for ${monthKey}: ${status}`)
-    return { status }
+    return { monthKey, status }
   } catch (error) {
     console.error('Error checking processing status:', error)
     throw error
